@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from openai import OpenAI
 
+from binary_search import retrieve_best_frame
 from utils_clip import frame_retrieval_seg_ego
 from utils_general import get_from_cache, save_to_cache
 
@@ -82,11 +83,11 @@ def get_llm_response(
     ]
     key = json.dumps([model, messages])
     logger.info(messages)
-    cached_value = get_from_cache(key)
-    if cached_value is not None:
-        logger.info("Cache Hit")
-        logger.info(cached_value)
-        return cached_value
+    # cached_value = get_from_cache(key)
+    # if cached_value is not None:
+    #     logger.info("Cache Hit")
+    #     logger.info(cached_value)
+    #     return cached_value
 
     print("Not hit cache", key)
     input()
@@ -137,7 +138,9 @@ def generate_description_step(question, caption, num_frames, segment_des):
             {"segment_id": "1", "duration": "xxx - xxx", "description": "frame of xxx"},
             {"segment_id": "2", "duration": "xxx - xxx", "description": "frame of xxx"},
             {"segment_id": "3", "duration": "xxx - xxx", "description": "frame of xxx"},
-        ]
+        ],
+        "best_segment": 
+            {"segment_id": "2", "duration": "xxx - xxx", "description": "frame of xxx"}
     }
     prompt = f"""
     Given a video that has {num_frames} frames, the frames are decoded at 1 fps. Given the following descriptions of sampled frames in the video:
@@ -228,6 +231,66 @@ def read_caption(captions, sample_idx):
         video_caption[f"frame {idx}"] = captions[idx - 1]
     return video_caption
 
+######################################################################################################
+def ask_gpt_select_best_frame(partial_caps, formatted_question):
+    return partial_caps
+
+def select_best_sub_segment(captions, question):
+    caption_i, caption_k, caption_j = captions
+    formatted_description = {
+        "frame_descriptions": [
+            {"segment_id": "1", "duration": "xxx - xxx", "description": "frame of xxx"},
+            {"segment_id": "2", "duration": "xxx - xxx", "description": "frame of xxx"},
+        ]
+    }
+    prompt = f"""
+    Given the following descriptions of sampled frames in the video:
+    {[caption_i, caption_k, caption_j]}
+    #C to denote the sentence is an action done by the camera wearer (the person who recorded the video while wearing a camera on their head).
+    #O to denote that the sentence is an action done by someone other than the camera wearer.
+    To answer the following question: 
+    ``` 
+    {question}
+    ``` 
+    However, the information in the initial frames is not suffient.
+    Objective:
+    Our goal is to identify additional frames that contain crucial information necessary for answering the question. These frames should not only address the query directly but should also complement the insights gleaned from the descriptions of the initial frames.
+    To achieve this, we will:
+    1. Divide the video into segments based on the intervals between the initial frames as, candiate segments: {segment_des}
+    2. Determine which segments are likely to contain frames that are most relevant to the question. These frames should capture key visual elements, such as objects, humans, interactions, actions, and scenes, that are supportive to answer the question.
+    For each frame identified as potentially relevant, provide a concise description focusing on essential visual elements. Use a single sentence per frame. If the specifics of a segment's visual content are uncertain based on the current information, use placeholders for specific actions or objects, but ensure the description still conveys the segment's relevance to the query.
+    Select multiple frames from one segment if necessary to gather comprehensive insights. 
+    Return the descriptions and the segment id in JSON format, note "segment_id" must be smaller than {len(segment_des) + 1}, "duration" should be the same as candiate segments:
+    ```
+    {formatted_description}
+    ```
+    """
+    system_prompt = "You are a helpful assistant designed to output JSON."
+    response = get_llm_response(system_prompt, prompt, json_format=True)
+    return response
+
+def retrieve_best_frame(caps, duration, formatted_question):
+    i, j = duration
+    
+    if j - i + 1 <= 3:
+        return ask_gpt_select_best_frame(caps[i:j+1], formatted_question)
+    
+    k = (i + j) // 2
+    
+    caption_k = caps[k]
+    caption_i = caps[i]
+    caption_j = caps[j]
+    
+    description_left = generate_description_for_segment(caption_i, caption_k)
+    description_right = generate_description_for_segment(caption_k, caption_j)
+    
+    candidate_descriptions = select_best_sub_segment()
+    
+    if select_best_segement(description_left, description_right):
+        return retrieve_best_frame(caps, [caption_i, caption_k], formatted_question)
+    else:
+        return retrieve_best_frame(caps, [caption_k, caption_j], formatted_question)
+######################################################################################################
 
 def run_one_question(video_id, ann, caps, logs):
     question = ann["question"]
@@ -242,20 +305,23 @@ def run_one_question(video_id, ann, caps, logs):
     ### Step 1 ###
     sample_idx = np.linspace(1, num_frames, num=5, dtype=int).tolist()
     sampled_caps = read_caption(caps, sample_idx)
-    previous_prompt, answer_str = ask_gpt_caption(
-        formatted_question, sampled_caps, num_frames
-    )
-    answer = parse_text_find_number(answer_str)
-    confidence_str = self_eval(previous_prompt, answer_str)
-    confidence = parse_text_find_confidence(confidence_str)
+    # previous_prompt, answer_str = ask_gpt_caption(
+    #     formatted_question, sampled_caps, num_frames
+    # )
+    # answer = parse_text_find_number(answer_str)
+    # confidence_str = self_eval(previous_prompt, answer_str)
+    # confidence = parse_text_find_confidence(confidence_str)
+    
+    confidence = 1
 
     ### Step 2 ###
-    if confidence < 3:
+    if confidence < 4:
         try:
             segment_des = {
                 i + 1: f"{sample_idx[i]}-{sample_idx[i + 1]}"
                 for i in range(len(sample_idx) - 1)
             }
+
             candiate_descriptions = generate_description_step(
                 formatted_question,
                 sampled_caps,
@@ -263,58 +329,34 @@ def run_one_question(video_id, ann, caps, logs):
                 segment_des,
             )
             parsed_candiate_descriptions = parse_json(candiate_descriptions)
-            frame_idx = frame_retrieval_seg_ego(
-                parsed_candiate_descriptions["frame_descriptions"], video_id, sample_idx
+            logger.info(f"parsed_candidate_descriptions : {parsed_candiate_descriptions}")
+            # frame_idx = frame_retrieval_seg_ego(
+            #     parsed_candiate_descriptions["best_segment"], video_id, sample_idx
+            # )
+            
+            best_duration = list(map(int, parsed_candiate_descriptions["best_segment"]["duration"].split('-')))
+            logger.info(f"best_duration : {best_duration}")
+            frame_idx = retrieve_best_frame(
+                caps, best_duration, formatted_question
             )
             logger.info(f"Step 2: {frame_idx}")
             sample_idx += frame_idx
             sample_idx = sorted(list(set(sample_idx)))
 
-            sampled_caps = read_caption(caps, sample_idx)
-            previous_prompt, answer_str = ask_gpt_caption_step(
-                formatted_question, sampled_caps, num_frames
-            )
-            answer = parse_text_find_number(answer_str)
-            confidence_str = self_eval(previous_prompt, answer_str)
-            confidence = parse_text_find_confidence(confidence_str)
+            # sampled_caps = read_caption(caps, sample_idx)
+            # previous_prompt, answer_str = ask_gpt_caption_step(
+            #     formatted_question, sampled_caps, num_frames
+            # )
+            # answer = parse_text_find_number(answer_str)
+            # confidence_str = self_eval(previous_prompt, answer_str)
+            # confidence = parse_text_find_confidence(confidence_str)
         except Exception as e:
             logger.error(f"Step 2 Error: {e}")
-            answer_str = generate_final_answer(
-                formatted_question, sampled_caps, num_frames
-            )
-            answer = parse_text_find_number(answer_str)
+            # answer_str = generate_final_answer(
+            #     formatted_question, sampled_caps, num_frames
+            # )
+            # answer = parse_text_find_number(answer_str)
 
-    ### Step 3 ###
-    if confidence < 3:
-        try:
-            segment_des = {
-                i + 1: f"{sample_idx[i]}-{sample_idx[i + 1]}"
-                for i in range(len(sample_idx) - 1)
-            }
-            candiate_descriptions = generate_description_step(
-                formatted_question,
-                sampled_caps,
-                num_frames,
-                segment_des,
-            )
-            parsed_candiate_descriptions = parse_json(candiate_descriptions)
-            frame_idx = frame_retrieval_seg_ego(
-                parsed_candiate_descriptions["frame_descriptions"], video_id, sample_idx
-            )
-            logger.info(f"Step 3: {frame_idx}")
-            sample_idx += frame_idx
-            sample_idx = sorted(list(set(sample_idx)))
-            sampled_caps = read_caption(caps, sample_idx)
-            answer_str = generate_final_answer(
-                formatted_question, sampled_caps, num_frames
-            )
-            answer = parse_text_find_number(answer_str)
-        except Exception as e:
-            logger.error(f"Step 3 Error: {e}")
-            answer_str = generate_final_answer(
-                formatted_question, sampled_caps, num_frames
-            )
-            answer = parse_text_find_number(answer_str)
     if answer == -1:
         logger.info("Answer Index Not Found!")
         answer = random.randint(0, 4)
