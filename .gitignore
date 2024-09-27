@@ -4,3 +4,5 @@
 
 VideoAgent
 ego_features_448
+__pycache__
+.vscode
