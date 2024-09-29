@@ -82,14 +82,14 @@ def get_llm_response(
     ]
     key = json.dumps([model, messages])
     logger.info(messages)
-    cached_value = get_from_cache(key)
-    if cached_value is not None:
-        logger.info("Cache Hit")
-        logger.info(cached_value)
-        return cached_value
+    # cached_value = get_from_cache(key)
+    # if cached_value is not None:
+    #     logger.info("Cache Hit")
+    #     logger.info(cached_value)
+    #     return cached_value
 
-    print("Not hit cache", key)
-    input()
+    # print("Request llm response")
+    # input()
 
     for _ in range(3):
         try:
@@ -216,6 +216,7 @@ def ask_gpt_caption_step(question, caption, num_frames):
     {question}
     ``` 
     Please think step-by-step and write the best answer index in Json format {answer_format}. Note that only one answer is returned for the question.
+    Even if you want to abstain, you must select the best answer index given the available information. 
     """
     system_prompt = "You are a helpful assistant."
     response = get_llm_response(system_prompt, prompt, json_format=False)
@@ -284,40 +285,41 @@ def run_one_question(video_id, ann, caps, logs):
             )
             answer = parse_text_find_number(answer_str)
 
-    ### Step 3 ###
-    if confidence < 3:
-        try:
-            segment_des = {
-                i + 1: f"{sample_idx[i]}-{sample_idx[i + 1]}"
-                for i in range(len(sample_idx) - 1)
-            }
-            candiate_descriptions = generate_description_step(
-                formatted_question,
-                sampled_caps,
-                num_frames,
-                segment_des,
-            )
-            parsed_candiate_descriptions = parse_json(candiate_descriptions)
-            frame_idx = frame_retrieval_seg_ego(
-                parsed_candiate_descriptions["frame_descriptions"], video_id, sample_idx
-            )
-            logger.info(f"Step 3: {frame_idx}")
-            sample_idx += frame_idx
-            sample_idx = sorted(list(set(sample_idx)))
-            sampled_caps = read_caption(caps, sample_idx)
-            answer_str = generate_final_answer(
-                formatted_question, sampled_caps, num_frames
-            )
-            answer = parse_text_find_number(answer_str)
-        except Exception as e:
-            logger.error(f"Step 3 Error: {e}")
-            answer_str = generate_final_answer(
-                formatted_question, sampled_caps, num_frames
-            )
-            answer = parse_text_find_number(answer_str)
+    # ### Step 3 ###
+    # if confidence < 3:
+    #     try:
+    #         segment_des = {
+    #             i + 1: f"{sample_idx[i]}-{sample_idx[i + 1]}"
+    #             for i in range(len(sample_idx) - 1)
+    #         }
+    #         candiate_descriptions = generate_description_step(
+    #             formatted_question,
+    #             sampled_caps,
+    #             num_frames,
+    #             segment_des,
+    #         )
+    #         parsed_candiate_descriptions = parse_json(candiate_descriptions)
+    #         frame_idx = frame_retrieval_seg_ego(
+    #             parsed_candiate_descriptions["frame_descriptions"], video_id, sample_idx
+    #         )
+    #         logger.info(f"Step 3: {frame_idx}")
+    #         sample_idx += frame_idx
+    #         sample_idx = sorted(list(set(sample_idx)))
+    #         sampled_caps = read_caption(caps, sample_idx)
+    #         answer_str = generate_final_answer(
+    #             formatted_question, sampled_caps, num_frames
+    #         )
+    #         answer = parse_text_find_number(answer_str)
+    #     except Exception as e:
+    #         logger.error(f"Step 3 Error: {e}")
+    #         answer_str = generate_final_answer(
+    #             formatted_question, sampled_caps, num_frames
+    #         )
+    #         answer = parse_text_find_number(answer_str)
     if answer == -1:
         logger.info("Answer Index Not Found!")
-        answer = random.randint(0, 4)
+        # answer = random.randint(0, 4)
+        answer = 5
 
     logger.info(f"Finished video: {video_id}/{answer}/{ann['truth']}")
 
@@ -345,7 +347,7 @@ def main():
 
     tasks = [
         (video_id, anns[video_id], all_caps[video_id], logs)
-        for video_id in list(anns.keys())[2:3]
+        for video_id in list(anns.keys())[:30]
     ]
     with ThreadPoolExecutor(max_workers=1) as executor:
         executor.map(lambda p: run_one_question(*p), tasks)
